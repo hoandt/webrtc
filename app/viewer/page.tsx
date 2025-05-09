@@ -8,8 +8,9 @@ const Viewer: React.FC = () => {
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const [status, setStatus] = useState<string>("Connecting...");
   const [isPaused, setIsPaused] = useState<boolean>(false);
-  const isOBS = navigator.userAgent.includes("OBS");
+  const [isOBS, setIsOBS] = useState(false);
 
+ 
   const connectToBroadcaster = (socket: Socket, phone: string) => {
     setStatus("Connecting to broadcaster...");
     socket.emit("set_role", { role: "viewer", phone }, (roleResponse: any) => {
@@ -25,7 +26,11 @@ const Viewer: React.FC = () => {
       }
     });
   };
-
+  useEffect(() => {
+ 
+      setIsOBS(typeof navigator !== "undefined");
+ 
+  }, []);
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const phone = urlParams.get("phone") || "";
