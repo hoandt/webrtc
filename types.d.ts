@@ -9,3 +9,14 @@ export type NextApiResponseServerIO = NextApiResponse & {
     };
   };
 };
+
+export interface AuthState {
+  isLoggedIn: boolean;
+  jwtToken: string;
+  userId: string;
+  loginCredential: string;
+  password: string;
+  rememberMe: boolean;
+  userInfo: { phone: string; fullName: string } | null;
+  error: string;
+}

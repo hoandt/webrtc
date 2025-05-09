@@ -1,7 +1,6 @@
 import React, { useEffect } from "react";
 import { motion } from "framer-motion";
-import { BroadcastState ,AuthState} from "@/app/broadcaster/types/types";
-
+import { BroadcastState, AuthState } from "@/app/broadcaster/types/types";
 import { Socket } from "socket.io-client";
 
 interface SettingsPanelProps {
@@ -44,44 +43,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       const url = `${protocol}//${host}/viewer?phone=${encodeURIComponent(authState.userInfo.phone)}`;
       setObsUrl(url);
     }
-  }, [authState.userInfo?.phone]);
-
-  const startStream = async () => {
-    try {
-      const constraints: MediaStreamConstraints = {
-        video: cameraId
-          ? {
-              deviceId: { exact: cameraId },
-              height: { ideal: 1080 },
-              width: { ideal: 1920 },
-              frameRate: { ideal: 24 },
-            }
-          : true,
-        audio: false,
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log("getUserMedia stream:", stream);
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.play().catch((err) =>
-          console.error("Error playing broadcaster video:", err)
-        );
-      }
-      if (broadcastState.isPaused) {
-        socketRef.current?.emit("resume_broadcast");
-        setBroadcastState((prev) => ({ ...prev, isPaused: false }));
-      }
-    } catch (err: any) {
-      console.error("Error accessing camera:", err);
-      setBroadcastState((prev) => ({
-        ...prev,
-        error: "Cannot access camera: " + err.message,
-        isStarting: false,
-      }));
-    }
-  };
+  }, [authState.userInfo?.phone, setObsUrl]);
 
   const pauseStream = () => {
     if (streamRef.current) {
@@ -96,9 +58,22 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
-  const resumeStream = async () => {
-    if (broadcastState.isPaused) {
-      await startStream();
+  const resumeStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      setBroadcastState((prev) => ({ ...prev, isPaused: false }));
+      socketRef.current?.emit("resume_broadcast");
+      if (videoRef.current) {
+        videoRef.current.play().catch((err) => {
+          console.error("Error resuming video:", err);
+          setBroadcastState((prev) => ({
+            ...prev,
+            error: "Failed to resume video: " + err.message,
+          }));
+        });
+      }
     }
   };
 
@@ -121,7 +96,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             isBroadcasting: true,
             isStarting: false,
           }));
-          startStream();
         } else {
           setBroadcastState((prev) => ({
             ...prev,
@@ -139,11 +113,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         setBroadcastState((prev) => ({
           ...prev,
           isBroadcasting: false,
+          broadcasterName:"",
           viewerCount: 0,
           isStarting: false,
           isPaused: false,
         }));
         streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       } else {
         setBroadcastState((prev) => ({
           ...prev,
@@ -151,6 +127,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         }));
       }
     });
+  };
+
+  // Generate camera label
+  const getCameraLabel = (camera: MediaDeviceInfo, index: number) => {
+    const label = camera.label.toLowerCase();
+    if (label.includes("back") || label.includes("environment")) {
+      return "Back Camera";
+    } else if (label.includes("front") || label.includes("user")) {
+      return "Front Camera";
+    }
+    return camera.label || `Camera ${index + 1}`;
   };
 
   return (
@@ -163,11 +150,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             className="bg-gray-800 text-white text-sm rounded-lg px-3 py-2 w-full max-w-[70%]"
           >
             {availableCameras.length === 0 ? (
-              <option value="">No cameras</option>
+              <option value="">No cameras available</option>
             ) : (
               availableCameras.map((camera, idx) => (
                 <option key={camera.deviceId} value={camera.deviceId}>
-                  {camera.label || `Camera ${idx + 1}`}
+                  {getCameraLabel(camera, idx)}
                 </option>
               ))
             )}
@@ -205,6 +192,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
               placeholder="Password"
               className="w-full px-3 py-2 bg-gray-900 rounded-lg placeholder-gray-400"
             />
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={authState.rememberMe}
+                onChange={(e) =>
+                  setAuthState((prev) => ({ ...prev, rememberMe: e.target.checked }))
+                }
+                className="rounded text-blue-600"
+              />
+              <span className="text-sm text-gray-400">Remember me</span>
+            </label>
             <motion.button
               onClick={handleLogin}
               className="w-full px-4 py-2 bg-blue-600 rounded-lg"

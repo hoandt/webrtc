@@ -10,8 +10,9 @@ export function useAuth() {
     userId: "",
     loginCredential: "",
     password: "",
-    rememberMe: false,
+    rememberMe: true, // Default to true for persistent login
     userInfo: null,
+    error: "",
   });
 
   const fetchUserInfo = async (userId: string, token: string) => {
@@ -23,7 +24,7 @@ export function useAuth() {
           Authorization: `Bearer ${token}`,
         },
       });
-      
+
       if (response.data.status === 1 && response.data.data) {
         const data = response.data.data;
         if (data.isBlocked) {
@@ -63,6 +64,7 @@ export function useAuth() {
         ...prev,
         error: err.response?.data?.message || "Failed to fetch user info",
       }));
+      // Don't log out automatically; let user retry
     }
   };
 
@@ -95,10 +97,7 @@ export function useAuth() {
             loginCredential: "",
             password: "",
           }));
-
-          if (authState.rememberMe) {
-            localStorage.setItem("jwtToken", token);
-          }
+          localStorage.setItem("jwtToken", token); // Always store token
         } else {
           setAuthState((prev) => ({
             ...prev,
@@ -123,22 +122,24 @@ export function useAuth() {
   const handleLogout = async () => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
-      await axios.post(
-        await axios.post("/api/logout", {}, {
-          headers: {
-            accept: "text/plain",
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${authState.jwtToken}`,
-          },
-        }))
-        
-      setAuthState((prev) => ({
-        ...prev,
+      await axios.post("/api/logout", {}, {
+        headers: {
+          accept: "text/plain",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authState.jwtToken}`,
+        },
+      });
+
+      setAuthState({
         isLoggedIn: false,
         jwtToken: "",
         userId: "",
+        loginCredential: "",
+        password: "",
+        rememberMe: true,
         userInfo: null,
-      }));
+        error: "",
+      });
       localStorage.removeItem("jwtToken");
     } catch (err: any) {
       console.error("Logout error:", err);
@@ -149,16 +150,21 @@ export function useAuth() {
   useEffect(() => {
     const storedToken = localStorage.getItem("jwtToken");
     if (storedToken) {
-      const payload = decodeJwt(storedToken);
-      const currentTime = Math.floor(Date.now() / 1000);
-      if (payload.exp && payload.exp > currentTime && payload.UserId) {
-        setAuthState((prev) => ({
-          ...prev,
-          jwtToken: storedToken,
-          userId: payload.UserId!,
-          isLoggedIn: true,
-        }));
-      } else {
+      try {
+        const payload = decodeJwt(storedToken);
+        const currentTime = Math.floor(Date.now() / 1000);
+        if (payload.exp && payload.exp > currentTime && payload.UserId) {
+          setAuthState((prev) => ({
+            ...prev,
+            jwtToken: storedToken,
+            userId: payload.UserId!,
+            isLoggedIn: true,
+          }));
+        } else {
+          localStorage.removeItem("jwtToken");
+        }
+      } catch (err) {
+        console.error("Error decoding JWT:", err);
         localStorage.removeItem("jwtToken");
       }
     }

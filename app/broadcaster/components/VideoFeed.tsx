@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
- 
 
 interface ScanResult {
   type: string;
@@ -11,7 +10,8 @@ interface VideoFeedProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   obsUrl: string;
   isBroadcasting: boolean;
-  cameraId: string;
+  cameraId?: string;
+  facingMode?: "user" | "environment";
   streamRef: React.MutableRefObject<MediaStream | null>;
   availableCameras: MediaDeviceInfo[];
 }
@@ -21,26 +21,30 @@ const VideoFeed: React.FC<VideoFeedProps> = ({
   obsUrl,
   isBroadcasting,
   cameraId,
+  facingMode,
   streamRef,
   availableCameras,
 }) => {
- 
   const [error, setError] = useState<string>("");
- 
+  const [isPortrait, setIsPortrait] = useState<boolean>(
+    window.matchMedia("(orientation: portrait)").matches
+  );
   const scannerContainerRef = useRef<HTMLDivElement>(null);
 
-  // Initialize camera preview
+  // Initialize camera preview with orientation-based constraints
   useEffect(() => {
     const startPreview = async () => {
-      if (!cameraId || !videoRef.current) return;
+      if (!videoRef.current) return;
 
       try {
         setError("");
         const constraints: MediaStreamConstraints = {
           video: {
-            deviceId: { exact: cameraId },
-            height: { ideal: 1080 },
-            width: { ideal: 1920 },
+            ...(cameraId ? { deviceId: { exact: cameraId } } : {}),
+            ...(facingMode ? { facingMode: { exact: facingMode } } : {}),
+            width: { ideal: isPortrait ? 720 : 1920 },
+            height: { ideal: isPortrait ? 1280 : 1080 },
+            aspectRatio: { ideal: isPortrait ? 9 / 16 : 16 / 9 },
             frameRate: { ideal: 24 },
           },
           audio: false,
@@ -55,11 +59,19 @@ const VideoFeed: React.FC<VideoFeedProps> = ({
         });
       } catch (err: any) {
         console.error("Error accessing camera:", err);
-        setError("Cannot access camera: " + err.message);
+        if (err.name === "OverconstrainedError") {
+          setError("Camera does not support requested resolution or aspect ratio.");
+        } else if (err.name === "NotAllowedError") {
+          setError("Camera access denied. Please grant permission.");
+        } else {
+          setError("Cannot access camera: " + err.message);
+        }
       }
     };
 
-    startPreview();
+    if (isBroadcasting) {
+      startPreview();
+    }
 
     return () => {
       if (streamRef.current) {
@@ -67,9 +79,23 @@ const VideoFeed: React.FC<VideoFeedProps> = ({
         streamRef.current = null;
       }
     };
-  }, [cameraId, videoRef, streamRef]);
+  }, [cameraId, facingMode, videoRef, streamRef, isPortrait, isBroadcasting]);
 
- 
+  // Handle orientation changes
+  useEffect(() => {
+    const handleOrientationChange = () => {
+      const portrait = window.matchMedia("(orientation: portrait)").matches;
+      setIsPortrait(portrait);
+    };
+
+    window.addEventListener("orientationchange", handleOrientationChange);
+    window.matchMedia("(orientation: portrait)").addEventListener("change", handleOrientationChange);
+
+    return () => {
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      window.matchMedia("(orientation: portrait)").removeEventListener("change", handleOrientationChange);
+    };
+  }, []);
 
   const copyToClipboard = () => {
     if (obsUrl) {
@@ -84,7 +110,7 @@ const VideoFeed: React.FC<VideoFeedProps> = ({
 
   return (
     <div className="w-full max-w-md relative">
-      <div className="bg-black rounded-lg overflow-hidden aspect-video relative">
+      <div className={`bg-black rounded-lg overflow-hidden ${isPortrait ? "aspect-[9/16]" : "aspect-[16/9]"} relative`}>
         <video
           ref={videoRef}
           autoPlay
@@ -111,7 +137,7 @@ const VideoFeed: React.FC<VideoFeedProps> = ({
           </motion.div>
         )}
       </div>
- 
+
       {error && (
         <motion.p
           className="mt-3 text-red-400 text-sm text-center"
