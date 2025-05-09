@@ -4,9 +4,9 @@ import next from "next";
 import { Server } from "socket.io";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME || "localhost";
-const port = parseInt(process.env.PORT, 10) || 3000;
-const corsOrigin = process.env.CORS_ORIGIN || (dev ? "http://localhost:3000" : "*");
+const hostname = process.env.HOSTNAME || "0.0.0.0";
+const port = parseInt(process.env.PORT, 10) || 3005;
+const corsOrigin = process.env.CORS_ORIGIN || (dev ? "http://localhost:3005" : "*");
 const app = next({ dev, hostname, port });
 const handler = app.getRequestHandler();
 
