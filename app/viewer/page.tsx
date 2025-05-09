@@ -9,8 +9,10 @@ const Viewer: React.FC = () => {
   const [status, setStatus] = useState<string>("Connecting...");
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [isOBS, setIsOBS] = useState(false);
+  const [isPortrait, setIsPortrait] = useState<boolean>(
+    typeof window !== "undefined" && window.matchMedia("(orientation: portrait)").matches
+  );
 
- 
   const connectToBroadcaster = (socket: Socket, phone: string) => {
     setStatus("Connecting to broadcaster...");
     socket.emit("set_role", { role: "viewer", phone }, (roleResponse: any) => {
@@ -26,11 +28,25 @@ const Viewer: React.FC = () => {
       }
     });
   };
+
   useEffect(() => {
- 
-      setIsOBS(typeof navigator !== "undefined");
- 
+    setIsOBS(typeof navigator !== "undefined");
+
+    // Handle orientation changes
+    const handleOrientationChange = () => {
+      const portrait = window.matchMedia("(orientation: portrait)").matches;
+      setIsPortrait(portrait);
+    };
+
+    window.addEventListener("orientationchange", handleOrientationChange);
+    window.matchMedia("(orientation: portrait)").addEventListener("change", handleOrientationChange);
+
+    return () => {
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      window.matchMedia("(orientation: portrait)").removeEventListener("change", handleOrientationChange);
+    };
   }, []);
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const phone = urlParams.get("phone") || "";
@@ -168,13 +184,17 @@ const Viewer: React.FC = () => {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-black">
-      <div className="relative w-full h-full">
+      <div
+        className={`relative w-full max-w-3xl ${
+          isPortrait ? "aspect-[9/16]" : "aspect-[16/9]"
+        } bg-black rounded-lg overflow-hidden`}
+      >
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-contain"
+          className="w-full h-full object-cover"
           onError={(e) => {
             console.error("Video element error:", e);
             setStatus("Video error: " + (e as any).message);
@@ -182,12 +202,12 @@ const Viewer: React.FC = () => {
         />
         {isPaused && (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
-            <p className="text-white text-lg">Stream Paused</p>
+            <p className="text-white text-lg font-medium">Stream Paused</p>
           </div>
         )}
       </div>
       {!isOBS && (
-        <p className="absolute bottom-4 text-sm text-white bg-black bg-opacity-50 px-2 py-1 rounded">
+        <p className="mt-4 text-sm text-white bg-black bg-opacity-50 px-2 py-1 rounded">
           {status}
         </p>
       )}

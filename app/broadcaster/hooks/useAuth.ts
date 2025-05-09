@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
+import axios, { AxiosError } from "axios";
 import { decodeJwt } from "@/app/broadcaster/utils/jwt";
 import { AuthState, UserInfo, JwtPayload } from "@/app/broadcaster/types/types";
 
@@ -10,11 +10,75 @@ export function useAuth() {
     userId: "",
     loginCredential: "",
     password: "",
-    rememberMe: true, // Default to true for persistent login
+    rememberMe: true,
     userInfo: null,
     error: "",
   });
 
+  // Validate JWT token (client-side and server-side)
+  const validateToken = async (token: string): Promise<boolean> => {
+    try {
+      // Client-side validation
+      const payload = decodeJwt(token);
+      const currentTime = Math.floor(Date.now() / 1000);
+      if (!payload.UserId || !payload.exp || payload.exp <= currentTime) {
+        console.warn("Token invalid or expired:", payload);
+        return false;
+      }
+
+      // Server-side validation (optional, using user-info endpoint)
+      const response = await axios.get(`/api/user-info?id=${payload.UserId}`, {
+        headers: {
+          accept: "text/plain",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.data.status !== 1 || !response.data.data) {
+        console.warn("Server rejected token:", response.data.message);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.error("Token validation error:", err);
+      return false;
+    }
+  };
+
+  // Force logout
+  const forceLogout = (
+    streamRef?: React.MutableRefObject<MediaStream | null>,
+    peerConnections?: React.MutableRefObject<Map<string, RTCPeerConnection>>
+  ) => {
+    // 🔌 Stop media stream
+    if (streamRef?.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  
+    // ❌ Close all WebRTC peer connections
+    if (peerConnections?.current) {
+      peerConnections.current.forEach((pc) => pc.close());
+      peerConnections.current.clear();
+    }
+  
+    setAuthState({
+      isLoggedIn: false,
+      jwtToken: "",
+      userId: "",
+      loginCredential: "",
+      password: "",
+      rememberMe: true,
+      userInfo: null,
+      error: "Session expired. Please log in again.",
+    });
+  
+    localStorage.removeItem("jwtToken");
+  };
+  
+
+  // Fetch user info
   const fetchUserInfo = async (userId: string, token: string) => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
@@ -64,10 +128,13 @@ export function useAuth() {
         ...prev,
         error: err.response?.data?.message || "Failed to fetch user info",
       }));
-      // Don't log out automatically; let user retry
+      if (err.response?.status === 401) {
+        forceLogout();
+      }
     }
   };
 
+  // Handle login
   const handleLogin = async () => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
@@ -97,7 +164,9 @@ export function useAuth() {
             loginCredential: "",
             password: "",
           }));
-          localStorage.setItem("jwtToken", token); // Always store token
+          if (authState.rememberMe) {
+            localStorage.setItem("jwtToken", token);
+          }
         } else {
           setAuthState((prev) => ({
             ...prev,
@@ -119,7 +188,11 @@ export function useAuth() {
     }
   };
 
-  const handleLogout = async () => {
+  // Handle logout
+  const handleLogout = async (
+    streamRef?: React.MutableRefObject<MediaStream | null>,
+    peerConnections?: React.MutableRefObject<Map<string, RTCPeerConnection>>
+  ) => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
       await axios.post("/api/logout", {}, {
@@ -129,31 +202,40 @@ export function useAuth() {
           Authorization: `Bearer ${authState.jwtToken}`,
         },
       });
-
-      setAuthState({
-        isLoggedIn: false,
-        jwtToken: "",
-        userId: "",
-        loginCredential: "",
-        password: "",
-        rememberMe: true,
-        userInfo: null,
-        error: "",
-      });
-      localStorage.removeItem("jwtToken");
     } catch (err: any) {
       console.error("Logout error:", err);
       setAuthState((prev) => ({ ...prev, error: "Logout failed" }));
+    } finally {
+      forceLogout(streamRef, peerConnections);
+      console.log("Out")
     }
   };
+  
 
+  // Axios interceptor for 401 errors
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error: AxiosError) => {
+        if (error.response?.status === 401) {
+          forceLogout();
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, []);
+
+  // Check token on load
   useEffect(() => {
     const storedToken = localStorage.getItem("jwtToken");
     if (storedToken) {
-      try {
-        const payload = decodeJwt(storedToken);
-        const currentTime = Math.floor(Date.now() / 1000);
-        if (payload.exp && payload.exp > currentTime && payload.UserId) {
+      validateToken(storedToken).then((isValid) => {
+        if (isValid) {
+          const payload = decodeJwt(storedToken);
           setAuthState((prev) => ({
             ...prev,
             jwtToken: storedToken,
@@ -161,20 +243,33 @@ export function useAuth() {
             isLoggedIn: true,
           }));
         } else {
-          localStorage.removeItem("jwtToken");
+          forceLogout();
         }
-      } catch (err) {
-        console.error("Error decoding JWT:", err);
-        localStorage.removeItem("jwtToken");
-      }
+      });
     }
   }, []);
 
+  // Periodic token validation
+  useEffect(() => {
+    if (authState.isLoggedIn && authState.jwtToken) {
+      const interval = setInterval(() => {
+        validateToken(authState.jwtToken).then((isValid) => {
+          if (!isValid) {
+            forceLogout();
+          }
+        });
+      }, 5 * 60 * 1000); // Check every 5 minutes
+
+      return () => clearInterval(interval);
+    }
+  }, [authState.isLoggedIn, authState.jwtToken]);
+
+  // Fetch user info
   useEffect(() => {
     if (authState.isLoggedIn && authState.jwtToken && authState.userId) {
       fetchUserInfo(authState.userId, authState.jwtToken);
     }
   }, [authState.isLoggedIn, authState.jwtToken, authState.userId]);
 
-  return { authState, setAuthState, handleLogin, handleLogout };
+  return { authState, setAuthState, handleLogin, handleLogout, validateToken };
 }

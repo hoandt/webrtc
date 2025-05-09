@@ -31,7 +31,9 @@ const BroadcastPage: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
-
+  const handleLogoutWithCleanup = async () => {
+    await handleLogout(streamRef, peerConnections);
+  };
   const { socketRef } = useBroadcastSocket(authState, streamRef, peerConnections, setBroadcastState);
 
   return (
@@ -40,7 +42,7 @@ const BroadcastPage: React.FC = () => {
         authState={authState}
         setAuthState={setAuthState}
         handleLogin={handleLogin}
-        handleLogout={handleLogout}
+        handleLogout={handleLogoutWithCleanup}
         cameraId={cameraId}
         setCameraId={setCameraId}
         availableCameras={availableCameras}
@@ -48,6 +50,7 @@ const BroadcastPage: React.FC = () => {
         setBroadcastState={setBroadcastState}
         streamRef={streamRef}
         videoRef={videoRef}
+        
         socketRef={socketRef}
         obsUrl={obsUrl}
         setObsUrl={setObsUrl}
