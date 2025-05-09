@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { parse } from "url";
 import next from "next";
 import { Server } from "socket.io";
-import crypto from "crypto";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
@@ -12,9 +11,9 @@ const app = next({ dev, hostname, port });
 const handler = app.getRequestHandler();
 
 const logger = {
-  info: (msg) => console.log(`[INFO] ${msg}`),
-  warn: (msg) => console.warn(`[WARN] ${msg}`),
-  error: (msg) => console.error(`[ERROR] ${msg}`),
+  info: (msg) => console.log(`[${new Date().toISOString()}] [INFO] ${msg}`),
+  warn: (msg) => console.warn(`[${new Date().toISOString()}] [WARN] ${msg}`),
+  error: (msg) => console.error(`[${new Date().toISOString()}] [ERROR] ${msg}`),
 };
 
 app.prepare().then(() => {
@@ -36,11 +35,9 @@ app.prepare().then(() => {
 
   const broadcasters = new Map();
 
-  const generateToken = () => crypto.randomUUID();
-
-  const findBroadcasterByToken = (token) => {
+  const findBroadcasterByPhone = (phone) => {
     for (const [id, data] of broadcasters) {
-      if (data.token === token) return { id, data };
+      if (data.phone === phone) return { id, data };
     }
     return null;
   };
@@ -48,43 +45,64 @@ app.prepare().then(() => {
   io.on("connection", (socket) => {
     logger.info(`Client connected: ${socket.id}`);
 
+    socket.on("get_broadcaster_name", (phone, callback) => {
+      const cb = typeof callback === "function" ? callback : () => {};
+      const broadcaster = findBroadcasterByPhone(phone);
+      if (broadcaster) {
+        logger.info(`Sending broadcaster name for phone: ${phone} to ${socket.id}`);
+        cb({ status: "success", name: broadcaster.data.name });
+      } else {
+        logger.warn(`No broadcaster found for phone: ${phone || "empty"}`);
+        cb({ status: "error", message: "Broadcaster not found" });
+      }
+    });
+
+    socket.on("check_broadcaster", (phone, callback) => {
+      const cb = typeof callback === "function" ? callback : () => {};
+      const broadcaster = findBroadcasterByPhone(phone);
+      logger.info(`Checking broadcaster for phone: ${phone} for ${socket.id}`);
+      cb({ status: "success", exists: !!broadcaster });
+    });
+
     socket.on("get_broadcasters", (callback) => {
       const cb = typeof callback === "function" ? callback : () => {};
-      const broadcasterList = Array.from(broadcasters.entries()).map(([id, { token, name }]) => ({
-        token,
+      const broadcasterList = Array.from(broadcasters.entries()).map(([id, { phone, name }]) => ({
+        phone,
         name,
       }));
       logger.info(`Sending broadcasters to ${socket.id}: ${broadcasterList.length} broadcasters`);
       cb({ status: "success", broadcasters: broadcasterList });
     });
 
-    socket.on("get_latest_token", (callback) => {
+    socket.on("get_latest_broadcaster", (callback) => {
       const cb = typeof callback === "function" ? callback : () => {};
       if (broadcasters.size > 0) {
-        const [id, { token }] = broadcasters.entries().next().value;
-        logger.info(`Sending latest token to ${socket.id}: ${token}`);
-        cb({ status: "success", token });
+        const [id, { phone, name }] = broadcasters.entries().next().value;
+        logger.info(`Sending latest broadcaster to ${socket.id}: ${phone}`);
+        cb({ status: "success", phone, name });
       } else {
         logger.warn(`No active broadcaster for ${socket.id}`);
         cb({ status: "error", message: "No active broadcaster" });
       }
     });
 
-    socket.on("viewer_ready", (token, callback) => {
+    socket.on("viewer_ready", (phone, callback) => {
       try {
         const cb = typeof callback === "function" ? callback : () => {};
-        const broadcaster = findBroadcasterByToken(token);
+        const broadcaster = findBroadcasterByPhone(phone);
         if (broadcaster) {
-          const { id: broadcasterId } = broadcaster;
-          logger.info(`viewer_ready: token=${token}, viewerId=${socket.id} -> broadcaster ${broadcasterId}`);
+          const { id: broadcasterId, data: { viewers } } = broadcaster;
+          logger.info(`viewer_ready: phone=${phone}, viewerId=${socket.id} -> broadcaster ${broadcasterId}`);
           socket.to(broadcasterId).emit("viewer_ready", {
             viewerId: socket.id,
             timestamp: Date.now(),
           });
+          viewers.set(socket.id, { socketId: socket.id });
+          socket.to(broadcasterId).emit("viewer_count", { viewerCount: viewers.size });
           cb({ status: "success" });
         } else {
-          logger.warn(`No broadcaster found for token: ${token}`);
-          cb({ status: "error", message: "Invalid token" });
+          logger.warn(`No broadcaster found for phone: ${phone || "empty"}`);
+          cb({ status: "error", message: "Invalid phone number" });
         }
       } catch (err) {
         logger.error(`viewer_ready: ${err.message}`);
@@ -92,25 +110,23 @@ app.prepare().then(() => {
       }
     });
 
-    socket.on("viewer_stats", ({ token, stats }, callback) => {
-      try {
-        const cb = typeof callback === "function" ? callback : () => {};
-        const broadcaster = findBroadcasterByToken(token);
-        if (broadcaster) {
-          const { id: broadcasterId } = broadcaster;
-          logger.info(`viewer_stats: token=${token}, viewerId=${socket.id} -> broadcaster ${broadcasterId}`);
-          socket.to(broadcasterId).emit("viewer_stats", {
-            viewerId: socket.id,
-            stats,
-          });
-          cb({ status: "success" });
-        } else {
-          logger.warn(`No broadcaster found for token: ${token}`);
-          cb({ status: "error", message: "Invalid token" });
-        }
-      } catch (err) {
-        logger.error(`viewer_stats: ${err.message}`);
-        callback?.({ status: "error", message: "Server error" });
+    socket.on("pause_broadcast", () => {
+      if (broadcasters.has(socket.id)) {
+        logger.info(`Broadcaster ${socket.id} paused broadcast`);
+        const { viewers } = broadcasters.get(socket.id);
+        viewers.forEach((_, viewerId) => {
+          socket.to(viewerId).emit("broadcaster_paused");
+        });
+      }
+    });
+
+    socket.on("resume_broadcast", () => {
+      if (broadcasters.has(socket.id)) {
+        logger.info(`Broadcaster ${socket.id} resumed broadcast`);
+        const { viewers } = broadcasters.get(socket.id);
+        viewers.forEach((_, viewerId) => {
+          socket.to(viewerId).emit("broadcaster_resumed");
+        });
       }
     });
 
@@ -118,13 +134,13 @@ app.prepare().then(() => {
       try {
         logger.info(`Client disconnected: ${socket.id}`);
         if (broadcasters.has(socket.id)) {
-          const { viewers, token } = broadcasters.get(socket.id);
+          const { viewers, phone } = broadcasters.get(socket.id);
           viewers.forEach((_, viewerId) => {
             logger.info(`Notifying viewer ${viewerId} of broadcaster disconnection`);
             io.to(viewerId).emit("broadcaster_disconnected");
           });
           broadcasters.delete(socket.id);
-          logger.info(`Broadcaster ${socket.id} (token: ${token}) disconnected`);
+          logger.info(`Broadcaster ${socket.id} (phone: ${phone}) disconnected`);
         } else {
           broadcasters.forEach(({ viewers }, broadcasterId) => {
             if (viewers.has(socket.id)) {
@@ -141,41 +157,50 @@ app.prepare().then(() => {
       }
     });
 
-    socket.on("set_role", (data, callback) => {
+    socket.on("set_role", async (data, callback) => {
       try {
         const cb = typeof callback === "function" ? callback : () => {};
-        logger.info(`set_role: sid=${socket.id}, role=${data.role}, token=${data.token || "none"}, name=${data.name || "none"}`);
-        
+        const phone = data.phone || "";
+        logger.info(`set_role: sid=${socket.id}, role=${data.role}, phone=${phone || "none"}, name=${data.name || "none"}`);
+
         if (data.role === "broadcaster") {
-          let token = data.token || generateToken();
-          const name = data.name || `Broadcaster ${socket.id.slice(0, 8)}`;
+          if (!phone) {
+            logger.warn(`Missing phone number for broadcaster ${socket.id}`);
+            cb({ status: "error", message: "Phone number required" });
+            return;
+          }
           const existing = [...broadcasters.entries()].find(
-            ([id, { token: bToken }]) => bToken === token && id !== socket.id
+            ([id, { phone: bPhone }]) => bPhone === phone && id !== socket.id
           );
           if (existing) {
-            logger.warn(`Token ${token} already in use`);
-            cb({ status: "error", message: "Token in use" });
+            logger.warn(`Phone ${phone} already in use`);
+            cb({ status: "error", message: "Phone number in use" });
             return;
           }
           broadcasters.set(socket.id, {
             broadcasterId: socket.id,
-            token,
-            name,
+            phone,
+            name: data.name || `Broadcaster ${socket.id.slice(0, 8)}`,
             viewers: broadcasters.get(socket.id)?.viewers || new Map(),
           });
-          logger.info(`Broadcaster set: ${socket.id}, token: ${token}, name: ${name}`);
-          cb({ status: "success", broadcastToken: token });
+          logger.info(`Broadcaster set: ${socket.id}, phone: ${phone}, name: ${data.name || `Broadcaster ${socket.id.slice(0, 8)}`}`);
+          cb({ status: "success" });
           io.to(socket.id).emit("viewer_count", {
             viewerCount: broadcasters.get(socket.id).viewers.size,
           });
         } else if (data.role === "viewer") {
-          const token = data.token || "";
+          if (!phone) {
+            logger.warn(`Viewer rejected: ${socket.id}, missing phone`);
+            cb({ status: "error", message: "Phone number required" });
+            socket.disconnect();
+            return;
+          }
           let broadcasterId = null;
-          for (const [id, { token: bToken, viewers }] of broadcasters) {
-            if (token === bToken) {
+          for (const [id, { phone: bPhone, viewers }] of broadcasters) {
+            if (bPhone === phone) {
               broadcasterId = id;
               viewers.set(socket.id, { socketId: socket.id });
-              logger.info(`Viewer ${socket.id} added to broadcaster ${broadcasterId}`);
+              logger.info(`Viewer ${socket.id} added to broadcaster ${broadcasterId} (phone: ${phone})`);
               io.to(broadcasterId).emit("new_viewer", { viewerId: socket.id });
               io.to(broadcasterId).emit("viewer_count", { viewerCount: viewers.size });
               cb({ status: "success" });
@@ -183,8 +208,8 @@ app.prepare().then(() => {
             }
           }
           if (!broadcasterId) {
-            logger.warn(`Viewer rejected: ${socket.id}, invalid token: ${token}`);
-            cb({ status: "error", message: "Unauthorized: Invalid token" });
+            logger.warn(`Viewer rejected: ${socket.id}, invalid phone: ${phone}`);
+            cb({ status: "error", message: "Unauthorized: Invalid phone number" });
             socket.disconnect();
           }
         } else {
@@ -196,23 +221,23 @@ app.prepare().then(() => {
       }
     });
 
-    socket.on("revoke_token", (callback) => {
+    socket.on("stop_broadcast", (callback) => {
       try {
         const cb = typeof callback === "function" ? callback : () => {};
         if (broadcasters.has(socket.id)) {
-          const { viewers, token } = broadcasters.get(socket.id);
+          const { viewers, phone } = broadcasters.get(socket.id);
           viewers.forEach((_, viewerId) => {
             logger.info(`Notifying viewer ${viewerId} of broadcaster disconnection`);
             io.to(viewerId).emit("broadcaster_disconnected");
           });
           broadcasters.delete(socket.id);
-          logger.info(`Broadcaster ${socket.id} revoked token: ${token}`);
+          logger.info(`Broadcaster ${socket.id} stopped broadcast: ${phone}`);
           cb({ status: "success" });
         } else {
           cb({ status: "error", message: "Not a broadcaster" });
         }
       } catch (err) {
-        logger.error(`revoke_token: ${err.message}`);
+        logger.error(`stop_broadcast: ${err.message}`);
         callback?.({ status: "error", message: "Server error" });
       }
     });
