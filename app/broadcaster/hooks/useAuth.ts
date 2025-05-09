@@ -17,15 +17,13 @@ export function useAuth() {
   const fetchUserInfo = async (userId: string, token: string) => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
-      const response = await axios.get(
-        `https://layer-api.swifthub.net/api/identity/v1/User/getUserInfo?id=${userId}`,
-        {
-          headers: {
-            accept: "text/plain",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await axios.get(`/api/user-info?id=${userId}`, {
+        headers: {
+          accept: "text/plain",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      
       if (response.data.status === 1 && response.data.data) {
         const data = response.data.data;
         if (data.isBlocked) {
@@ -126,16 +124,14 @@ export function useAuth() {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
       await axios.post(
-        "https://layer-api.swifthub.net/api/identity/v1/Authentication/logout",
-        {},
-        {
+        await axios.post("/api/logout", {}, {
           headers: {
             accept: "text/plain",
             "Content-Type": "application/json",
             Authorization: `Bearer ${authState.jwtToken}`,
           },
-        }
-      );
+        }))
+        
       setAuthState((prev) => ({
         ...prev,
         isLoggedIn: false,
