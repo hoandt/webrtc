@@ -71,19 +71,10 @@ export function useAuth() {
   const handleLogin = async () => {
     try {
       setAuthState((prev) => ({ ...prev, error: "" }));
-      const response = await axios.post(
-        "https://layer-api.swifthub.net/api/identity/v1/Authentication/login",
-        {
-          loginCredential: authState.loginCredential,
-          password: authState.password,
-        },
-        {
-          headers: {
-            accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
+      const response = await axios.post("/api/login", {
+        loginCredential: authState.loginCredential,
+        password: authState.password,
+      });
 
       if (response.data.status === 1 && response.data.data?.token) {
         if (response.data.data.needChangePassword) {
